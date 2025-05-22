@@ -9,18 +9,18 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global movie cache
+# Global cache
 all_movies_cache = []
 
 def fetch_and_cache_movies():
     global all_movies_cache
-    print("[CACHE] Building Malayalam OTT movie list...")
+    print("[CACHE] Fetching Malayalam OTT movies...")
 
     today = datetime.now().strftime("%Y-%m-%d")
     final_movies = []
 
     for page in range(1, 1000):
-        print(f"[INFO] Page {page}")
+        print(f"[INFO] Checking page {page}")
         params = {
             "api_key": TMDB_API_KEY,
             "with_original_language": "ml",
@@ -38,14 +38,15 @@ def fetch_and_cache_movies():
 
             for movie in results:
                 movie_id = movie.get("id")
-                if not movie_id:
-                    continue
+                title = movie.get("title")
+                if not movie_id or not title:
+                    continue  # invalid
 
-                prov_resp = requests.get(
-                    f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers",
-                    params={"api_key": TMDB_API_KEY}
-                )
-                prov_data = prov_resp.json()
+                # Check OTT availability
+                providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
+                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
+                prov_data = prov_response.json()
+
                 if "results" in prov_data and "IN" in prov_data["results"]:
                     if "flatrate" in prov_data["results"]["IN"]:
                         final_movies.append(movie)
@@ -59,18 +60,25 @@ def fetch_and_cache_movies():
 
 
 def to_stremio_meta(movie):
-    if not movie.get("id") or not movie.get("title"):
-        return None  # skip invalid or incomplete entries
+    try:
+        movie_id = movie.get("id")
+        title = movie.get("title")
 
-    return {
-        "id": str(movie["id"]),
-        "type": "movie",
-        "name": movie["title"],
-        "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
-        "description": movie.get("overview"),
-        "releaseInfo": movie.get("release_date", ""),
-        "background": f"https://image.tmdb.org/t/p/w780{movie['backdrop_path']}" if movie.get("backdrop_path") else None
-    }
+        if not movie_id or not title:
+            return None
+
+        return {
+            "id": str(movie_id),
+            "type": "movie",
+            "name": title,
+            "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
+            "description": movie.get("overview", ""),
+            "releaseInfo": movie.get("release_date", ""),
+            "background": f"https://image.tmdb.org/t/p/w780{movie['backdrop_path']}" if movie.get("backdrop_path") else None
+        }
+    except Exception as e:
+        print(f"[ERROR] to_stremio_meta failed: {e}")
+        return None
 
 
 @app.route("/manifest.json")
@@ -104,7 +112,13 @@ def catalog():
             return jsonify({"metas": []})
 
         sliced = all_movies_cache[skip:skip + page_size]
-        metas = [meta for meta in (to_stremio_meta(m) for m in sliced) if meta]
+
+        metas = []
+        for movie in sliced:
+            meta = to_stremio_meta(movie)
+            if meta:
+                metas.append(meta)
+
         print(f"[INFO] Returning {len(metas)} metas (skip={skip})")
         return jsonify({"metas": metas})
 
@@ -113,7 +127,7 @@ def catalog():
         return jsonify({"metas": []})
 
 
-# ✅ Immediately load movie cache on start
+# Load all movies on startup
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
