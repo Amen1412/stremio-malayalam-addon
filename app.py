@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from datetime import datetime
@@ -9,15 +9,22 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-def get_malayalam_movies(limit=9999):
-    print("[INFO] Fetching all Malayalam OTT movies from TMDB")
+# Cache so we don’t repeat TMDb requests every time
+all_movies_cache = []
+
+def get_all_ott_malayalam_movies():
+    global all_movies_cache
+    if all_movies_cache:
+        print("[CACHE] Using cached Malayalam OTT movie list")
+        return all_movies_cache
+
+    print("[INFO] Fetching all Malayalam OTT movies from TMDb")
 
     today = datetime.now().strftime("%Y-%m-%d")
-    base_url = f"{TMDB_BASE_URL}/discover/movie"
     final_movies = []
 
-    for page in range(1, 1000):  # Max 999 pages per TMDb rules
-        print(f"[INFO] Checking page {page}...")
+    for page in range(1, 1000):
+        print(f"[INFO] Checking page {page}")
         params = {
             "api_key": TMDB_API_KEY,
             "with_original_language": "ml",
@@ -28,12 +35,9 @@ def get_malayalam_movies(limit=9999):
         }
 
         try:
-            response = requests.get(base_url, params=params)
-            data = response.json()
-            results = data.get("results", [])
-
+            response = requests.get(f"{TMDB_BASE_URL}/discover/movie", params=params)
+            results = response.json().get("results", [])
             if not results:
-                print("[INFO] No more results, stopping.")
                 break
 
             for movie in results:
@@ -41,21 +45,24 @@ def get_malayalam_movies(limit=9999):
                 if not movie_id:
                     continue
 
-                providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
-                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
-                prov_data = prov_response.json()
-
+                # Check providers
+                prov_resp = requests.get(
+                    f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers",
+                    params={"api_key": TMDB_API_KEY}
+                )
+                prov_data = prov_resp.json()
                 if "results" in prov_data and "IN" in prov_data["results"]:
-                    country_info = prov_data["results"]["IN"]
-                    if "flatrate" in country_info:
+                    if "flatrate" in prov_data["results"]["IN"]:
                         final_movies.append(movie)
 
         except Exception as e:
-            print(f"[ERROR] Failed on page {page}: {e}")
+            print(f"[ERROR] on page {page}: {e}")
             break
 
-    print(f"[INFO] Collected {len(final_movies)} Malayalam OTT movies total")
+    print(f"[INFO] Total Malayalam OTT movies: {len(final_movies)}")
+    all_movies_cache = final_movies
     return final_movies
+
 
 def to_stremio_meta(movie):
     return {
@@ -67,6 +74,7 @@ def to_stremio_meta(movie):
         "releaseInfo": movie.get("release_date", ""),
         "background": f"https://image.tmdb.org/t/p/w780{movie['backdrop_path']}" if movie.get("backdrop_path") else None
     }
+
 
 @app.route("/manifest.json")
 def manifest():
@@ -85,17 +93,22 @@ def manifest():
         "idPrefixes": ["tt"]
     })
 
+
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
     try:
-        movies = get_malayalam_movies()
+        skip = int(request.args.get("skip", 0))
+        all_movies = get_all_ott_malayalam_movies()
+        slice_size = 100
+        movies = all_movies[skip:skip + slice_size]
         metas = [to_stremio_meta(m) for m in movies]
-        print(f"[INFO] Returning {len(metas)} metas")
+        print(f"[INFO] Returning {len(metas)} metas (skip={skip})")
         return jsonify({"metas": metas})
     except Exception as e:
-        print(f"[ERROR] Failed to build catalog: {e}")
+        print(f"[ERROR] Catalog generation failed: {e}")
         return jsonify({"metas": []})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
