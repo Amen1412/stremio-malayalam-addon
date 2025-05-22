@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
 from datetime import datetime
@@ -9,21 +9,23 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global movie cache
-all_movies_cache = []
+# In-memory cache for both languages
+movie_cache = {
+    "malayalam": [],
+    "hindi": []
+}
 
-def fetch_and_cache_movies():
-    global all_movies_cache
-    print("[CACHE] Fetching Malayalam OTT movies...")
-
+# Function to fetch and cache movies
+def fetch_movies(language_code):
+    print(f"[FETCH] Getting {language_code.upper()} OTT movies")
     today = datetime.now().strftime("%Y-%m-%d")
     final_movies = []
 
     for page in range(1, 1000):
-        print(f"[INFO] Checking page {page}")
+        print(f"[{language_code}] Checking page {page}")
         params = {
             "api_key": TMDB_API_KEY,
-            "with_original_language": "ml",
+            "with_original_language": language_code,
             "sort_by": "release_date.desc",
             "release_date.lte": today,
             "region": "IN",
@@ -49,7 +51,7 @@ def fetch_and_cache_movies():
 
                 if "results" in prov_data and "IN" in prov_data["results"]:
                     if "flatrate" in prov_data["results"]["IN"]:
-                        # Now get IMDb ID
+                        # Get IMDb ID
                         ext_url = f"{TMDB_BASE_URL}/movie/{movie_id}/external_ids"
                         ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY})
                         ext_data = ext_response.json()
@@ -60,85 +62,87 @@ def fetch_and_cache_movies():
                             final_movies.append(movie)
 
         except Exception as e:
-            print(f"[ERROR] Page {page} failed: {e}")
+            print(f"[{language_code}] Error on page {page}: {e}")
             break
 
-    # Deduplicate
-    seen_ids = set()
-    unique_movies = []
-    for movie in final_movies:
-        imdb_id = movie.get("imdb_id")
-        if imdb_id and imdb_id not in seen_ids:
-            seen_ids.add(imdb_id)
-            unique_movies.append(movie)
+    # Remove duplicates
+    seen = set()
+    unique = []
+    for m in final_movies:
+        if m["imdb_id"] not in seen:
+            seen.add(m["imdb_id"])
+            unique.append(m)
 
-    all_movies_cache = unique_movies
-    print(f"[CACHE] Fetched {len(all_movies_cache)} Malayalam OTT movies ✅")
+    movie_cache[language_code] = unique
+    print(f"[CACHE] {language_code.upper()} total: {len(unique)} ✅")
 
-
+# Convert TMDB movie to Stremio meta format
 def to_stremio_meta(movie):
     try:
-        imdb_id = movie.get("imdb_id")
-        title = movie.get("title")
-        if not imdb_id or not title:
-            return None
-
         return {
-            "id": imdb_id,
+            "id": movie.get("imdb_id"),
             "type": "movie",
-            "name": title,
+            "name": movie.get("title"),
             "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
             "description": movie.get("overview", ""),
             "releaseInfo": movie.get("release_date", ""),
             "background": f"https://image.tmdb.org/t/p/w780{movie['backdrop_path']}" if movie.get("backdrop_path") else None
         }
-    except Exception as e:
-        print(f"[ERROR] to_stremio_meta failed: {e}")
+    except:
         return None
 
-
+# Manifest with two catalogs
 @app.route("/manifest.json")
 def manifest():
     return jsonify({
-        "id": "org.malayalam.catalog",
+        "id": "org.dual.catalog",
         "version": "1.0.0",
-        "name": "Malayalam",
-        "description": "Latest Malayalam Movies on OTT",
+        "name": "Malayalam + Hindi",
+        "description": "Latest Malayalam and Hindi Movies on OTT",
         "resources": ["catalog"],
         "types": ["movie"],
-        "catalogs": [{
-            "type": "movie",
-            "id": "malayalam",
-            "name": "Malayalam"
-        }],
+        "catalogs": [
+            {
+                "type": "movie",
+                "id": "malayalam",
+                "name": "Malayalam"
+            },
+            {
+                "type": "movie",
+                "id": "hindi",
+                "name": "Hindi"
+            }
+        ],
         "idPrefixes": ["tt"]
     })
 
-
-@app.route("/catalog/movie/malayalam.json")
-def catalog():
-    print("[INFO] Catalog requested")
-
-    try:
-        metas = [meta for meta in (to_stremio_meta(m) for m in all_movies_cache) if meta]
-        print(f"[INFO] Returning {len(metas)} total movies ✅")
-        return jsonify({"metas": metas})
-    except Exception as e:
-        print(f"[ERROR] Catalog error: {e}")
+# Catalog route
+@app.route("/catalog/movie/<catalog_id>.json")
+def catalog(catalog_id):
+    if catalog_id not in movie_cache:
         return jsonify({"metas": []})
 
+    print(f"[SERVE] Sending catalog: {catalog_id}")
+    metas = [m for m in (to_stremio_meta(movie) for movie in movie_cache[catalog_id]) if m]
+    return jsonify({"metas": metas})
 
+# Manual refresh
 @app.route("/refresh")
 def refresh():
     try:
-        fetch_and_cache_movies()
-        return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
+        fetch_movies("ml")   # Malayalam
+        fetch_movies("hi")   # Hindi
+        return jsonify({
+            "status": "refreshed",
+            "malayalam": len(movie_cache["malayalam"]),
+            "hindi": len(movie_cache["hindi"])
+        })
     except Exception as e:
         return jsonify({"error": str(e)})
 
-
-# Fetch on startup
-fetch_and_cache_movies()
+# Fetch both on startup
+fetch_movies("ml")
+fetch_movies("hi")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
