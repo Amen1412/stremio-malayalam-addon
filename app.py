@@ -40,7 +40,7 @@ def fetch_and_cache_movies():
                 movie_id = movie.get("id")
                 title = movie.get("title")
                 if not movie_id or not title:
-                    continue  # invalid
+                    continue  # skip broken entries
 
                 # Check OTT availability
                 providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
@@ -55,8 +55,17 @@ def fetch_and_cache_movies():
             print(f"[ERROR] Page {page} failed: {e}")
             break
 
-    all_movies_cache = final_movies
-    print(f"[CACHE] Fetched {len(final_movies)} Malayalam OTT movies ✅")
+    # Remove duplicates just in case
+    seen_ids = set()
+    unique_movies = []
+    for movie in final_movies:
+        mid = movie.get("id")
+        if mid and mid not in seen_ids:
+            seen_ids.add(mid)
+            unique_movies.append(movie)
+
+    all_movies_cache = unique_movies
+    print(f"[CACHE] Fetched {len(all_movies_cache)} Malayalam OTT movies ✅")
 
 
 def to_stremio_meta(movie):
@@ -68,7 +77,7 @@ def to_stremio_meta(movie):
             return None
 
         return {
-            "id": str(movie_id),
+            "id": str(movie_id),  # Use TMDB ID
             "type": "movie",
             "name": title,
             "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
@@ -95,7 +104,7 @@ def manifest():
             "id": "malayalam",
             "name": "Malayalam"
         }],
-        "idPrefixes": ["tt"]
+        "idPrefixes": ["tt", ""]  # Supports both TMDB and IMDb
     })
 
 
@@ -112,12 +121,7 @@ def catalog():
             return jsonify({"metas": []})
 
         sliced = all_movies_cache[skip:skip + page_size]
-
-        metas = []
-        for movie in sliced:
-            meta = to_stremio_meta(movie)
-            if meta:
-                metas.append(meta)
+        metas = [meta for meta in (to_stremio_meta(m) for m in sliced) if meta]
 
         print(f"[INFO] Returning {len(metas)} metas (skip={skip})")
         return jsonify({"metas": metas})
@@ -127,7 +131,7 @@ def catalog():
         return jsonify({"metas": []})
 
 
-# Load all movies on startup
+# Fetch movies immediately when app starts
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
