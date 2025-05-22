@@ -4,7 +4,7 @@ import requests
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)  # This fixes the "Failed to fetch" issue in Stremio
+CORS(app)
 
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
@@ -19,17 +19,36 @@ def get_malayalam_movies(limit=10):
         "with_original_language": "ml",
         "sort_by": "release_date.desc",
         "release_date.lte": today,
-        "with_watch_monetization_types": "flatrate",  # streaming only
-        "region": "IN",  # optional, for better results in India
+        "region": "IN",
         "page": 1
     }
 
     response = requests.get(url, params=params)
     data = response.json()
-    movies = data.get("results", [])[:limit]
+    candidates = data.get("results", [])
 
-    print(f"[INFO] Found {len(movies)} Malayalam OTT movies")
-    return movies
+    final_movies = []
+
+    for movie in candidates:
+        movie_id = movie.get("id")
+        if not movie_id:
+            continue
+
+        providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
+        prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
+        prov_data = prov_response.json()
+
+        # Check if at least one OTT provider is available in India
+        if "results" in prov_data and "IN" in prov_data["results"]:
+            country_info = prov_data["results"]["IN"]
+            if "flatrate" in country_info:
+                final_movies.append(movie)
+
+        if len(final_movies) >= limit:
+            break
+
+    print(f"[INFO] Returning {len(final_movies)} Malayalam OTT movies")
+    return final_movies
 
 def to_stremio_meta(movie):
     return {
@@ -62,7 +81,6 @@ def manifest():
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
-
     try:
         movies = get_malayalam_movies(limit=10)
         metas = [to_stremio_meta(m) for m in movies]
