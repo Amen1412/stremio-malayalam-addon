@@ -9,45 +9,52 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-def get_malayalam_movies(limit=10):
-    print("[INFO] Fetching Malayalam movies from TMDB")
+def get_malayalam_movies(limit=9999):
+    print("[INFO] Fetching all Malayalam OTT movies from TMDB")
 
     today = datetime.now().strftime("%Y-%m-%d")
-    url = f"{TMDB_BASE_URL}/discover/movie"
-    params = {
-        "api_key": TMDB_API_KEY,
-        "with_original_language": "ml",
-        "sort_by": "release_date.desc",
-        "release_date.lte": today,
-        "region": "IN",
-        "page": 1
-    }
-
-    response = requests.get(url, params=params)
-    data = response.json()
-    candidates = data.get("results", [])
-
+    base_url = f"{TMDB_BASE_URL}/discover/movie"
     final_movies = []
 
-    for movie in candidates:
-        movie_id = movie.get("id")
-        if not movie_id:
-            continue
+    for page in range(1, 1000):  # Max 999 pages per TMDb rules
+        print(f"[INFO] Checking page {page}...")
+        params = {
+            "api_key": TMDB_API_KEY,
+            "with_original_language": "ml",
+            "sort_by": "release_date.desc",
+            "release_date.lte": today,
+            "region": "IN",
+            "page": page
+        }
 
-        providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
-        prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
-        prov_data = prov_response.json()
+        try:
+            response = requests.get(base_url, params=params)
+            data = response.json()
+            results = data.get("results", [])
 
-        # Check if at least one OTT provider is available in India
-        if "results" in prov_data and "IN" in prov_data["results"]:
-            country_info = prov_data["results"]["IN"]
-            if "flatrate" in country_info:
-                final_movies.append(movie)
+            if not results:
+                print("[INFO] No more results, stopping.")
+                break
 
-        if len(final_movies) >= limit:
+            for movie in results:
+                movie_id = movie.get("id")
+                if not movie_id:
+                    continue
+
+                providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
+                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
+                prov_data = prov_response.json()
+
+                if "results" in prov_data and "IN" in prov_data["results"]:
+                    country_info = prov_data["results"]["IN"]
+                    if "flatrate" in country_info:
+                        final_movies.append(movie)
+
+        except Exception as e:
+            print(f"[ERROR] Failed on page {page}: {e}")
             break
 
-    print(f"[INFO] Returning {len(final_movies)} Malayalam OTT movies")
+    print(f"[INFO] Collected {len(final_movies)} Malayalam OTT movies total")
     return final_movies
 
 def to_stremio_meta(movie):
@@ -82,7 +89,7 @@ def manifest():
 def catalog():
     print("[INFO] Catalog requested")
     try:
-        movies = get_malayalam_movies(limit=10)
+        movies = get_malayalam_movies()
         metas = [to_stremio_meta(m) for m in movies]
         print(f"[INFO] Returning {len(metas)} metas")
         return jsonify({"metas": metas})
