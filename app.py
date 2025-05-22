@@ -9,7 +9,7 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global cache
+# Global movie cache
 all_movies_cache = []
 
 def fetch_and_cache_movies():
@@ -51,7 +51,7 @@ def fetch_and_cache_movies():
                         final_movies.append(movie)
 
         except Exception as e:
-            print(f"[ERROR] Failed on page {page}: {e}")
+            print(f"[ERROR] Page {page} failed: {e}")
             break
 
     all_movies_cache = final_movies
@@ -59,10 +59,13 @@ def fetch_and_cache_movies():
 
 
 def to_stremio_meta(movie):
+    if not movie.get("id") or not movie.get("title"):
+        return None  # skip invalid or incomplete entries
+
     return {
         "id": str(movie["id"]),
         "type": "movie",
-        "name": movie.get("title"),
+        "name": movie["title"],
         "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
         "description": movie.get("overview"),
         "releaseInfo": movie.get("release_date", ""),
@@ -97,19 +100,20 @@ def catalog():
         page_size = 100
 
         if not all_movies_cache:
+            print("[WARN] Cache is empty")
             return jsonify({"metas": []})
 
         sliced = all_movies_cache[skip:skip + page_size]
-        metas = [to_stremio_meta(m) for m in sliced]
+        metas = [meta for meta in (to_stremio_meta(m) for m in sliced) if meta]
         print(f"[INFO] Returning {len(metas)} metas (skip={skip})")
         return jsonify({"metas": metas})
 
     except Exception as e:
-        print(f"[ERROR] Catalog failed: {e}")
+        print(f"[ERROR] Catalog error: {e}")
         return jsonify({"metas": []})
 
 
-# ✅ Immediately build the cache when app loads (not async/thread)
+# ✅ Immediately load movie cache on start
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
