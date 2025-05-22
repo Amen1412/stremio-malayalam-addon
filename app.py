@@ -1,97 +1,82 @@
 from flask import Flask, jsonify, request
-from flask_cors import CORS
 import requests
-import threading
-import time
+from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)
 
-PORT = 10000  # required for Render port binding
-
-TMDB_API_KEY = "YOUR_TMDB_API_KEY"
+TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-LANGUAGES = {
-    "malayalam": "ml",
-    "hindi": "hi"
-}
 
-movies_cache = {
-    "malayalam": [],
-    "hindi": []
-}
 
-def fetch_movies(language_code, category):
-    url = f"{TMDB_BASE_URL}/discover/movie"
-    params = {
-        "api_key": TMDB_API_KEY,
-        "with_original_language": language_code,
-        "sort_by": "popularity.desc",
-        "page": 1
-    }
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    return response.json().get("results", [])
+def fetch_movies(language_code):
+    today = datetime.now().strftime("%Y-%m-%d")
+    all_movies = []
+    for page in range(1, 10):  # Adjust number of pages as needed
+        url = f"{TMDB_BASE_URL}/discover/movie"
+        params = {
+            "api_key": TMDB_API_KEY,
+            "with_original_language": language_code,
+            "sort_by": "release_date.desc",
+            "release_date.lte": today,
+            "with_watch_monetization_types": "flatrate",
+            "region": "IN",
+            "page": page
+        }
+        res = requests.get(url, params=params)
+        if res.status_code != 200:
+            break
+        data = res.json()
+        results = data.get("results", [])
+        if not results:
+            break
+        all_movies.extend(results)
+    return all_movies
 
-def build_meta(movie):
+
+def to_stremio_meta(movie):
     return {
         "id": str(movie["id"]),
         "type": "movie",
         "name": movie.get("title"),
-        "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else "",
-        "description": movie.get("overview", "")
+        "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
+        "description": movie.get("overview"),
+        "releaseInfo": movie.get("release_date", ""),
+        "background": f"https://image.tmdb.org/t/p/w780{movie['backdrop_path']}" if movie.get("backdrop_path") else None
     }
 
-def update_cache():
-    while True:
-        for key, lang_code in LANGUAGES.items():
-            try:
-                print(f"Fetching {key} movies...")
-                raw = fetch_movies(lang_code, "movie")
-                movies_cache[key] = [build_meta(movie) for movie in raw]
-            except Exception as e:
-                print(f"Failed to update {key} movies: {e}")
-        time.sleep(86400)  # Refresh every 24 hours
-
-# Start cache update thread
-threading.Thread(target=update_cache, daemon=True).start()
 
 @app.route("/manifest.json")
 def manifest():
     return jsonify({
-        "id": "org.stremio.malayalam.hindi",
+        "id": "org.malayalam.hindi.catalog",
         "version": "1.0.0",
-        "name": "Indian Movies Addon",
-        "description": "Shows Malayalam and Hindi movies from TMDB",
-        "resources": ["catalog", "meta"],
+        "name": "Malayalam + Hindi OTT",
+        "description": "Latest Malayalam & Hindi Movies on OTT",
+        "resources": ["catalog"],
         "types": ["movie"],
         "catalogs": [
-            {
-                "type": "movie",
-                "id": "malayalam",
-                "name": "Malayalam Movies"
-            },
-            {
-                "type": "movie",
-                "id": "hindi",
-                "name": "Hindi Movies"
-            }
-        ]
+            {"type": "movie", "id": "malayalam", "name": "Malayalam"},
+            {"type": "movie", "id": "hindi", "name": "Hindi"}
+        ],
+        "idPrefixes": ["tt"]
     })
 
-@app.route("/catalog/<type>/<id>.json")
-def catalog(type, id):
-    if id in movies_cache:
-        return jsonify({"metas": movies_cache[id]})
-    return jsonify({"metas": []})
 
-@app.route("/meta/<type>/<id>.json")
-def meta(type, id):
-    for lang_movies in movies_cache.values():
-        for movie in lang_movies:
-            if movie["id"] == id:
-                return jsonify({"meta": movie})
-    return jsonify({})
+@app.route("/catalog/movie/<catalog_id>.json")
+def catalog(catalog_id):
+    try:
+        if catalog_id == "malayalam":
+            movies = fetch_movies("ml")
+        elif catalog_id == "hindi":
+            movies = fetch_movies("hi")
+        else:
+            return jsonify({"metas": []})
+        metas = [to_stremio_meta(m) for m in movies]
+        return jsonify({"metas": metas})
+    except Exception as e:
+        print(f"[ERROR] Catalog fetch failed: {e}")
+        return jsonify({"metas": []})
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=10000)
