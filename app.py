@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_cors import CORS
 import requests
 from datetime import datetime
@@ -9,7 +9,7 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global movie cache
+# Global cache
 all_movies_cache = []
 
 def fetch_and_cache_movies():
@@ -42,7 +42,7 @@ def fetch_and_cache_movies():
                 if not movie_id or not title:
                     continue
 
-                # Get providers to check OTT
+                # Check OTT availability
                 providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
                 prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
                 prov_data = prov_response.json()
@@ -63,7 +63,7 @@ def fetch_and_cache_movies():
             print(f"[ERROR] Page {page} failed: {e}")
             break
 
-    # Deduplicate by IMDb ID
+    # Deduplicate
     seen_ids = set()
     unique_movies = []
     for movie in final_movies:
@@ -84,7 +84,7 @@ def to_stremio_meta(movie):
             return None
 
         return {
-            "id": imdb_id,  # 👈 Torrentio and MediaFusion need IMDb ID
+            "id": imdb_id,
             "type": "movie",
             "name": title,
             "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
@@ -120,25 +120,15 @@ def catalog():
     print("[INFO] Catalog requested")
 
     try:
-        skip = int(request.args.get("skip", 0))
-        page_size = 100
-
-        if not all_movies_cache:
-            print("[WARN] Cache is empty")
-            return jsonify({"metas": []})
-
-        sliced = all_movies_cache[skip:skip + page_size]
-        metas = [meta for meta in (to_stremio_meta(m) for m in sliced) if meta]
-
-        print(f"[INFO] Returning {len(metas)} metas (skip={skip})")
+        metas = [meta for meta in (to_stremio_meta(m) for m in all_movies_cache) if meta]
+        print(f"[INFO] Returning {len(metas)} total movies ✅")
         return jsonify({"metas": metas})
-
     except Exception as e:
         print(f"[ERROR] Catalog error: {e}")
         return jsonify({"metas": []})
 
 
-# Load once at startup
+# Run once at startup
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
