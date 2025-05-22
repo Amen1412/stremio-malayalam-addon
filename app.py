@@ -1,8 +1,10 @@
 from flask import Flask, jsonify
+from flask_cors import CORS
 import requests
 from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)  # This fixes the "Failed to fetch" issue in Stremio
 
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
