@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from datetime import datetime
+import threading
 
 app = Flask(__name__)
 CORS(app)
@@ -9,22 +10,18 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Cache so we don’t repeat TMDb requests every time
+# Global cache
 all_movies_cache = []
 
-def get_all_ott_malayalam_movies():
+def fetch_and_cache_movies():
     global all_movies_cache
-    if all_movies_cache:
-        print("[CACHE] Using cached Malayalam OTT movie list")
-        return all_movies_cache
-
-    print("[INFO] Fetching all Malayalam OTT movies from TMDb")
+    print("[CACHE] Building Malayalam OTT movie list...")
 
     today = datetime.now().strftime("%Y-%m-%d")
     final_movies = []
 
     for page in range(1, 1000):
-        print(f"[INFO] Checking page {page}")
+        print(f"[INFO] Page {page}")
         params = {
             "api_key": TMDB_API_KEY,
             "with_original_language": "ml",
@@ -45,7 +42,6 @@ def get_all_ott_malayalam_movies():
                 if not movie_id:
                     continue
 
-                # Check providers
                 prov_resp = requests.get(
                     f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers",
                     params={"api_key": TMDB_API_KEY}
@@ -56,12 +52,11 @@ def get_all_ott_malayalam_movies():
                         final_movies.append(movie)
 
         except Exception as e:
-            print(f"[ERROR] on page {page}: {e}")
+            print(f"[ERROR] Failed on page {page}: {e}")
             break
 
-    print(f"[INFO] Total Malayalam OTT movies: {len(final_movies)}")
     all_movies_cache = final_movies
-    return final_movies
+    print(f"[CACHE] Fetched {len(final_movies)} Malayalam OTT movies ✅")
 
 
 def to_stremio_meta(movie):
@@ -97,18 +92,29 @@ def manifest():
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
+
     try:
         skip = int(request.args.get("skip", 0))
-        all_movies = get_all_ott_malayalam_movies()
-        slice_size = 100
-        movies = all_movies[skip:skip + slice_size]
-        metas = [to_stremio_meta(m) for m in movies]
+        page_size = 100
+
+        if not all_movies_cache:
+            return jsonify({"metas": []})
+
+        sliced = all_movies_cache[skip:skip + page_size]
+        metas = [to_stremio_meta(m) for m in sliced]
         print(f"[INFO] Returning {len(metas)} metas (skip={skip})")
         return jsonify({"metas": metas})
+
     except Exception as e:
-        print(f"[ERROR] Catalog generation failed: {e}")
+        print(f"[ERROR] Catalog failed: {e}")
         return jsonify({"metas": []})
 
+
+# Fetch data on app startup (runs in background)
+@app.before_first_request
+def load_data_async():
+    thread = threading.Thread(target=fetch_and_cache_movies)
+    thread.start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
