@@ -2,7 +2,6 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from datetime import datetime
-import threading
 
 app = Flask(__name__)
 CORS(app)
@@ -110,8 +109,8 @@ def catalog():
         return jsonify({"metas": []})
 
 
-# ✅ Start background thread at startup (no Flask decorators)
-threading.Thread(target=fetch_and_cache_movies, daemon=True).start()
+# ✅ Immediately build the cache when app loads (not async/thread)
+fetch_and_cache_movies()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
