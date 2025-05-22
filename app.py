@@ -9,7 +9,7 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global cache
+# Global movie cache
 all_movies_cache = []
 
 def fetch_and_cache_movies():
@@ -40,28 +40,36 @@ def fetch_and_cache_movies():
                 movie_id = movie.get("id")
                 title = movie.get("title")
                 if not movie_id or not title:
-                    continue  # skip broken entries
+                    continue
 
-                # Check OTT availability
+                # Get providers to check OTT
                 providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
                 prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
                 prov_data = prov_response.json()
 
                 if "results" in prov_data and "IN" in prov_data["results"]:
                     if "flatrate" in prov_data["results"]["IN"]:
-                        final_movies.append(movie)
+                        # Now get IMDb ID
+                        ext_url = f"{TMDB_BASE_URL}/movie/{movie_id}/external_ids"
+                        ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY})
+                        ext_data = ext_response.json()
+                        imdb_id = ext_data.get("imdb_id")
+
+                        if imdb_id and imdb_id.startswith("tt"):
+                            movie["imdb_id"] = imdb_id
+                            final_movies.append(movie)
 
         except Exception as e:
             print(f"[ERROR] Page {page} failed: {e}")
             break
 
-    # Remove duplicates just in case
+    # Deduplicate by IMDb ID
     seen_ids = set()
     unique_movies = []
     for movie in final_movies:
-        mid = movie.get("id")
-        if mid and mid not in seen_ids:
-            seen_ids.add(mid)
+        imdb_id = movie.get("imdb_id")
+        if imdb_id and imdb_id not in seen_ids:
+            seen_ids.add(imdb_id)
             unique_movies.append(movie)
 
     all_movies_cache = unique_movies
@@ -70,14 +78,13 @@ def fetch_and_cache_movies():
 
 def to_stremio_meta(movie):
     try:
-        movie_id = movie.get("id")
+        imdb_id = movie.get("imdb_id")
         title = movie.get("title")
-
-        if not movie_id or not title:
+        if not imdb_id or not title:
             return None
 
         return {
-            "id": str(movie_id),  # Use TMDB ID
+            "id": imdb_id,  # 👈 Torrentio and MediaFusion need IMDb ID
             "type": "movie",
             "name": title,
             "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
@@ -104,7 +111,7 @@ def manifest():
             "id": "malayalam",
             "name": "Malayalam"
         }],
-        "idPrefixes": ["tt", ""]  # Supports both TMDB and IMDb
+        "idPrefixes": ["tt"]
     })
 
 
@@ -131,7 +138,7 @@ def catalog():
         return jsonify({"metas": []})
 
 
-# Fetch movies immediately when app starts
+# Load once at startup
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
