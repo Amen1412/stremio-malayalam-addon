@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 from datetime import datetime
@@ -9,7 +9,7 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global cache
+# Global movie cache
 all_movies_cache = []
 
 def fetch_and_cache_movies():
@@ -128,7 +128,16 @@ def catalog():
         return jsonify({"metas": []})
 
 
-# Run once at startup
+@app.route("/refresh")
+def refresh():
+    try:
+        fetch_and_cache_movies()
+        return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+# Fetch on startup
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
