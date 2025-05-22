@@ -110,11 +110,8 @@ def catalog():
         return jsonify({"metas": []})
 
 
-# Fetch data on app startup (runs in background)
-@app.before_first_request
-def load_data_async():
-    thread = threading.Thread(target=fetch_and_cache_movies)
-    thread.start()
+# ✅ Start background thread at startup (no Flask decorators)
+threading.Thread(target=fetch_and_cache_movies, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
