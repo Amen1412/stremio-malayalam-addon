@@ -127,14 +127,20 @@ def catalog():
         print(f"[ERROR] Catalog error: {e}")
         return jsonify({"metas": []})
 
+import threading
 
 @app.route("/refresh")
 def refresh():
-    try:
-        fetch_and_cache_movies()
-        return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    def do_refresh():
+        try:
+            fetch_and_cache_movies()
+            print("[REFRESH] Background refresh complete ✅")
+        except Exception as e:
+            import traceback
+            print(f"[REFRESH ERROR] {traceback.format_exc()}")
+
+    threading.Thread(target=do_refresh).start()
+    return jsonify({"status": "refresh started in background"})
 
 
 # Fetch on startup
