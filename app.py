@@ -159,10 +159,17 @@ def refresh():
         print(f"[REFRESH ERROR] {traceback_str}")
         return jsonify({"error": str(e), "trace": traceback_str}), 500
 
-# Load only from saved data file on startup
+# Load cache on startup
 load_cache()
 
-# Do NOT run fetch_and_cache_movies here to avoid overwriting the cache
+# If no cache is loaded, do a full fetch (once only, useful on first deploy)
+if len(all_movies_cache) == 0:
+    print("[CACHE] No existing cache found — doing one-time initial fetch")
+    fetch_and_cache_movies(max_pages=100, max_duration=30)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=7000)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
