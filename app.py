@@ -1,9 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
-import time
-import json
-import os
 from datetime import datetime
 
 app = Flask(__name__)
@@ -12,40 +9,17 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-CACHE_FILE = "data.json"
+# Global movie cache
 all_movies_cache = []
 
-def load_cache():
-    global all_movies_cache
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                all_movies_cache = json.load(f)
-            print(f"[CACHE] Loaded {len(all_movies_cache)} movies from cache ✅")
-        except Exception as e:
-            print(f"[CACHE ERROR] Failed to load cache: {e}")
-
-def save_cache():
-    try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(all_movies_cache, f, ensure_ascii=False, indent=2)
-        print(f"[CACHE] Saved {len(all_movies_cache)} movies to cache ✅")
-    except Exception as e:
-        print(f"[CACHE ERROR] Failed to save cache: {e}")
-
-def fetch_and_cache_movies(max_pages=20, max_duration=20):
+def fetch_and_cache_movies():
     global all_movies_cache
     print("[CACHE] Fetching Malayalam OTT movies...")
 
-    start_time = time.time()
     today = datetime.now().strftime("%Y-%m-%d")
-    new_movies = []
+    final_movies = []
 
-    for page in range(1, max_pages + 1):
-        if time.time() - start_time > max_duration:
-            print(f"[CACHE] Stopping early due to timeout at page {page}")
-            break
-
+    for page in range(1, 1000):
         print(f"[INFO] Checking page {page}")
         params = {
             "api_key": TMDB_API_KEY,
@@ -57,7 +31,7 @@ def fetch_and_cache_movies(max_pages=20, max_duration=20):
         }
 
         try:
-            response = requests.get(f"{TMDB_BASE_URL}/discover/movie", params=params, timeout=10)
+            response = requests.get(f"{TMDB_BASE_URL}/discover/movie", params=params)
             results = response.json().get("results", [])
             if not results:
                 break
@@ -68,37 +42,39 @@ def fetch_and_cache_movies(max_pages=20, max_duration=20):
                 if not movie_id or not title:
                     continue
 
+                # Check OTT availability
                 providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
-                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY}, timeout=5)
+                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
                 prov_data = prov_response.json()
 
                 if "results" in prov_data and "IN" in prov_data["results"]:
                     if "flatrate" in prov_data["results"]["IN"]:
+                        # Now get IMDb ID
                         ext_url = f"{TMDB_BASE_URL}/movie/{movie_id}/external_ids"
-                        ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY}, timeout=5)
+                        ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY})
                         ext_data = ext_response.json()
                         imdb_id = ext_data.get("imdb_id")
 
                         if imdb_id and imdb_id.startswith("tt"):
                             movie["imdb_id"] = imdb_id
-                            new_movies.append(movie)
+                            final_movies.append(movie)
 
         except Exception as e:
             print(f"[ERROR] Page {page} failed: {e}")
             break
 
-    # Deduplicate against existing cache
-    seen_ids = set(movie.get("imdb_id") for movie in all_movies_cache if movie.get("imdb_id"))
-    added = 0
-    for movie in new_movies:
+    # Deduplicate
+    seen_ids = set()
+    unique_movies = []
+    for movie in final_movies:
         imdb_id = movie.get("imdb_id")
         if imdb_id and imdb_id not in seen_ids:
             seen_ids.add(imdb_id)
-            all_movies_cache.append(movie)
-            added += 1
+            unique_movies.append(movie)
 
-    save_cache()
-    print(f"[CACHE] Added {added} new movies ✅ — total now: {len(all_movies_cache)}")
+    all_movies_cache = unique_movies
+    print(f"[CACHE] Fetched {len(all_movies_cache)} Malayalam OTT movies ✅")
+
 
 def to_stremio_meta(movie):
     try:
@@ -120,6 +96,7 @@ def to_stremio_meta(movie):
         print(f"[ERROR] to_stremio_meta failed: {e}")
         return None
 
+
 @app.route("/manifest.json")
 def manifest():
     return jsonify({
@@ -137,9 +114,11 @@ def manifest():
         "idPrefixes": ["tt"]
     })
 
+
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
+
     try:
         metas = [meta for meta in (to_stremio_meta(m) for m in all_movies_cache) if meta]
         print(f"[INFO] Returning {len(metas)} total movies ✅")
@@ -148,31 +127,18 @@ def catalog():
         print(f"[ERROR] Catalog error: {e}")
         return jsonify({"metas": []})
 
+
 @app.route("/refresh")
 def refresh():
     try:
-        fetch_and_cache_movies(max_pages=20, max_duration=20)
+        fetch_and_cache_movies()
         return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
     except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(f"[REFRESH ERROR] {traceback_str}")
-        return jsonify({"error": str(e), "trace": traceback_str}), 500
-
-# Load cache on startup
-load_cache()
-
-# If no cache is loaded, do a full fetch (once only, useful on first deploy)
-if len(all_movies_cache) == 0:
-    print("[CACHE] No existing cache found — doing one-time initial fetch")
-    fetch_and_cache_movies(max_pages=100, max_duration=30)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7000)
+        return jsonify({"error": str(e)})
 
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7000)
+# Fetch on startup
+fetch_and_cache_movies()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
