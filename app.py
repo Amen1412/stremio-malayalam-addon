@@ -134,7 +134,10 @@ def refresh():
         fetch_and_cache_movies()
         return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
     except Exception as e:
-        return jsonify({"error": str(e)})
+        import traceback
+        traceback_str = traceback.format_exc()
+        print(f"[REFRESH ERROR] {traceback_str}")
+        return jsonify({"error": str(e), "trace": traceback_str}), 500
 
 
 # Fetch on startup
