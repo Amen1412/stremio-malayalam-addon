@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
+import time
 from datetime import datetime
 
 app = Flask(__name__)
@@ -12,14 +13,19 @@ TMDB_BASE_URL = "https://api.themoviedb.org/3"
 # Global movie cache
 all_movies_cache = []
 
-def fetch_and_cache_movies():
+def fetch_and_cache_movies(max_pages=20, max_duration=20):
     global all_movies_cache
     print("[CACHE] Fetching Malayalam OTT movies...")
 
+    start_time = time.time()
     today = datetime.now().strftime("%Y-%m-%d")
     final_movies = []
 
-    for page in range(1, 1000):
+    for page in range(1, max_pages + 1):
+        if time.time() - start_time > max_duration:
+            print(f"[CACHE] Stopping early due to timeout at page {page}")
+            break
+
         print(f"[INFO] Checking page {page}")
         params = {
             "api_key": TMDB_API_KEY,
@@ -31,7 +37,7 @@ def fetch_and_cache_movies():
         }
 
         try:
-            response = requests.get(f"{TMDB_BASE_URL}/discover/movie", params=params)
+            response = requests.get(f"{TMDB_BASE_URL}/discover/movie", params=params, timeout=10)
             results = response.json().get("results", [])
             if not results:
                 break
@@ -44,14 +50,14 @@ def fetch_and_cache_movies():
 
                 # Check OTT availability
                 providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
-                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY})
+                prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY}, timeout=5)
                 prov_data = prov_response.json()
 
                 if "results" in prov_data and "IN" in prov_data["results"]:
                     if "flatrate" in prov_data["results"]["IN"]:
                         # Now get IMDb ID
                         ext_url = f"{TMDB_BASE_URL}/movie/{movie_id}/external_ids"
-                        ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY})
+                        ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY}, timeout=5)
                         ext_data = ext_response.json()
                         imdb_id = ext_data.get("imdb_id")
 
@@ -64,17 +70,14 @@ def fetch_and_cache_movies():
             break
 
     # Deduplicate
-    seen_ids = set()
-    unique_movies = []
+    seen_ids = set(movie.get("imdb_id") for movie in all_movies_cache if movie.get("imdb_id"))
     for movie in final_movies:
         imdb_id = movie.get("imdb_id")
         if imdb_id and imdb_id not in seen_ids:
             seen_ids.add(imdb_id)
-            unique_movies.append(movie)
+            all_movies_cache.append(movie)
 
-    all_movies_cache = unique_movies
     print(f"[CACHE] Fetched {len(all_movies_cache)} Malayalam OTT movies ✅")
-
 
 def to_stremio_meta(movie):
     try:
@@ -96,7 +99,6 @@ def to_stremio_meta(movie):
         print(f"[ERROR] to_stremio_meta failed: {e}")
         return None
 
-
 @app.route("/manifest.json")
 def manifest():
     return jsonify({
@@ -114,7 +116,6 @@ def manifest():
         "idPrefixes": ["tt"]
     })
 
-
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
@@ -127,18 +128,16 @@ def catalog():
         print(f"[ERROR] Catalog error: {e}")
         return jsonify({"metas": []})
 
-
 @app.route("/refresh")
 def refresh():
     try:
-        fetch_and_cache_movies()
+        fetch_and_cache_movies(max_pages=20, max_duration=20)  # Optimized for fast refresh
         return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
     except Exception as e:
         import traceback
         traceback_str = traceback.format_exc()
         print(f"[REFRESH ERROR] {traceback_str}")
         return jsonify({"error": str(e), "trace": traceback_str}), 500
-
 
 # Fetch on startup
 fetch_and_cache_movies()
