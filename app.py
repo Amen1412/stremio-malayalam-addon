@@ -2,6 +2,8 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
 import time
+import json
+import os
 from datetime import datetime
 
 app = Flask(__name__)
@@ -10,8 +12,26 @@ CORS(app)
 TMDB_API_KEY = "29dfffa9ae088178fa088680b67ce583"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
-# Global movie cache
+CACHE_FILE = "data.json"
 all_movies_cache = []
+
+def load_cache():
+    global all_movies_cache
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                all_movies_cache = json.load(f)
+            print(f"[CACHE] Loaded {len(all_movies_cache)} movies from cache ✅")
+        except Exception as e:
+            print(f"[CACHE ERROR] Failed to load cache: {e}")
+
+def save_cache():
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(all_movies_cache, f, ensure_ascii=False, indent=2)
+        print(f"[CACHE] Saved {len(all_movies_cache)} movies to cache ✅")
+    except Exception as e:
+        print(f"[CACHE ERROR] Failed to save cache: {e}")
 
 def fetch_and_cache_movies(max_pages=20, max_duration=20):
     global all_movies_cache
@@ -19,7 +39,7 @@ def fetch_and_cache_movies(max_pages=20, max_duration=20):
 
     start_time = time.time()
     today = datetime.now().strftime("%Y-%m-%d")
-    final_movies = []
+    new_movies = []
 
     for page in range(1, max_pages + 1):
         if time.time() - start_time > max_duration:
@@ -48,14 +68,12 @@ def fetch_and_cache_movies(max_pages=20, max_duration=20):
                 if not movie_id or not title:
                     continue
 
-                # Check OTT availability
                 providers_url = f"{TMDB_BASE_URL}/movie/{movie_id}/watch/providers"
                 prov_response = requests.get(providers_url, params={"api_key": TMDB_API_KEY}, timeout=5)
                 prov_data = prov_response.json()
 
                 if "results" in prov_data and "IN" in prov_data["results"]:
                     if "flatrate" in prov_data["results"]["IN"]:
-                        # Now get IMDb ID
                         ext_url = f"{TMDB_BASE_URL}/movie/{movie_id}/external_ids"
                         ext_response = requests.get(ext_url, params={"api_key": TMDB_API_KEY}, timeout=5)
                         ext_data = ext_response.json()
@@ -63,21 +81,24 @@ def fetch_and_cache_movies(max_pages=20, max_duration=20):
 
                         if imdb_id and imdb_id.startswith("tt"):
                             movie["imdb_id"] = imdb_id
-                            final_movies.append(movie)
+                            new_movies.append(movie)
 
         except Exception as e:
             print(f"[ERROR] Page {page} failed: {e}")
             break
 
-    # Deduplicate
+    # Deduplicate against existing cache
     seen_ids = set(movie.get("imdb_id") for movie in all_movies_cache if movie.get("imdb_id"))
-    for movie in final_movies:
+    added = 0
+    for movie in new_movies:
         imdb_id = movie.get("imdb_id")
         if imdb_id and imdb_id not in seen_ids:
             seen_ids.add(imdb_id)
             all_movies_cache.append(movie)
+            added += 1
 
-    print(f"[CACHE] Fetched {len(all_movies_cache)} Malayalam OTT movies ✅")
+    save_cache()
+    print(f"[CACHE] Added {added} new movies ✅ — total now: {len(all_movies_cache)}")
 
 def to_stremio_meta(movie):
     try:
@@ -119,7 +140,6 @@ def manifest():
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
-
     try:
         metas = [meta for meta in (to_stremio_meta(m) for m in all_movies_cache) if meta]
         print(f"[INFO] Returning {len(metas)} total movies ✅")
@@ -131,7 +151,7 @@ def catalog():
 @app.route("/refresh")
 def refresh():
     try:
-        fetch_and_cache_movies(max_pages=20, max_duration=20)  # Optimized for fast refresh
+        fetch_and_cache_movies(max_pages=20, max_duration=20)
         return jsonify({"status": "refreshed", "count": len(all_movies_cache)})
     except Exception as e:
         import traceback
@@ -139,8 +159,10 @@ def refresh():
         print(f"[REFRESH ERROR] {traceback_str}")
         return jsonify({"error": str(e), "trace": traceback_str}), 500
 
-# Fetch on startup
-fetch_and_cache_movies()
+# Load cache on startup
+load_cache()
+# Fetch and update cache on startup
+fetch_and_cache_movies(max_pages=20, max_duration=20)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7000)
