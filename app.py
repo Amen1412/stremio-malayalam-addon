@@ -16,7 +16,6 @@ all_movies_cache = []
 def fetch_and_cache_movies():
     global all_movies_cache
     print("[CACHE] Fetching Malayalam OTT movies...")
-
     today = datetime.now().strftime("%Y-%m-%d")
     final_movies = []
 
@@ -76,7 +75,6 @@ def fetch_and_cache_movies():
     all_movies_cache = unique_movies
     print(f"[CACHE] Fetched {len(all_movies_cache)} Malayalam OTT movies ✅")
 
-
 def to_stremio_meta(movie):
     try:
         imdb_id = movie.get("imdb_id")
@@ -97,7 +95,6 @@ def to_stremio_meta(movie):
         print(f"[ERROR] to_stremio_meta failed: {e}")
         return None
 
-
 @app.route("/manifest.json")
 def manifest():
     return jsonify({
@@ -115,11 +112,9 @@ def manifest():
         "idPrefixes": ["tt"]
     })
 
-
 @app.route("/catalog/movie/malayalam.json")
 def catalog():
     print("[INFO] Catalog requested")
-
     try:
         metas = [meta for meta in (to_stremio_meta(m) for m in all_movies_cache) if meta]
         print(f"[INFO] Returning {len(metas)} total movies ✅")
@@ -143,9 +138,10 @@ def refresh():
     threading.Thread(target=do_refresh).start()
     return jsonify({"status": "refresh started in background"})
 
-
 # Fetch on startup
 fetch_and_cache_movies()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))
+    print(f"Starting Flask app on 0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port)
