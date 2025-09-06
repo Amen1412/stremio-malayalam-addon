@@ -143,5 +143,5 @@ fetch_and_cache_movies()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"Starting Flask app on 0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port)
+    print(f"🚀 Starting Flask app on 0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
